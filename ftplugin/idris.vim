@@ -30,6 +30,7 @@ let s:job = v:null
 let s:channel = v:null
 let s:output = ""
 let s:protocol_version = 0
+let s:after_connection = []
 let s:pending_requests = {}
 let s:loaded_file = ""
 let s:next_message_id = 1
@@ -67,6 +68,7 @@ function! IdrisDisconnect()
     let s:pending_requests = {}
     let s:loaded_file = ""
     let s:next_message_id = 1
+    let s:after_connection = []
 endfunction
 
 function! s:IdrisHandle(channel, msg)
@@ -102,6 +104,10 @@ function! s:IdrisMessage(msg)
     elseif name == 'output' && s:IsNumber(a:msg[2])
     elseif name == 'protocol-version' && s:IsNumber(a:msg[1])
         let s:protocol_version = a:msg[1]
+        for Item in s:after_connection
+            call Item()
+        endfor
+        let s:after_connection = []
     elseif name == 'set-prompt' && s:IsString(a:msg[1])
         " doing nothing on this message.
         echoerr printf("set-prompt %s", a:msg[1:])
@@ -114,18 +120,17 @@ function! s:IdrisMessage(msg)
     endif
 endfunction
 
-function! s:PrepareSending()
+function! s:SendingGuard(resumption)
     if IdrisStatus() != "open"
+        call add(s:after_connection, a:resumption)
         call IdrisConnect()
+        return 0
+    elseif s:protocol_version == 0
+        call add(s:after_connection, a:resumption)
+        return 0
+    else
+        return 1
     endif
-    while s:protocol_version == 0
-        sleep 100ms
-        if IdrisStatus() != "open"
-            echoerr "protocol not initialized"
-            return 0
-        endif
-    endwhile
-    return s:protocol_version
 endfunction
 
 function! IdrisSendMessage(command)
@@ -247,22 +252,24 @@ let s:InAnyIdris = 0
 let s:InIdris1 = 1
 let s:InIdris2 = 2
 function! s:IdrisCmd(...)
-    let argc = a:0
-    let suppose = a:1
-    let cmdname = a:2
-    let req = a:000[argc-1]
-    let current_version = s:PrepareSending()
-    if suppose != 0 && current_version != suppose
-        echoerr printf("'%s' does not support :%s", s:idris_prompt, cmdname)
-    else
-        let form = [{'command':cmdname}]
-        for item in a:000[2:argc-2]
-            call add(form, item)
-        endfor
-        if type(req) == v:t_none
-            call IdrisSendMessage(form)
+    if s:SendingGuard(function("s:IdrisCmd", a:000))
+        let argc = a:0
+        let suppose = a:1
+        let cmdname = a:2
+        let req = a:000[argc-1]
+        let current_version = s:protocol_version
+        if suppose != 0 && current_version != suppose
+            echoerr printf("'%s' does not support :%s", s:idris_prompt, cmdname)
         else
-            call IdrisRequest(form, req)
+            let form = [{'command':cmdname}]
+            for item in a:000[2:argc-2]
+                call add(form, item)
+            endfor
+            if type(req) == v:t_none
+                call IdrisSendMessage(form)
+            else
+                call IdrisRequest(form, req)
+            endif
         endif
     endif
 endfunction
