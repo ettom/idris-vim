@@ -9,6 +9,9 @@ and optional syntax checking via [Syntastic][]. If you need a REPL I recommend u
 
 ## Installation
 
+Vim8.0 or newer is required for this plugin because it uses the channels -feature
+to communicate with Idris runtime.
+
 I recommend using [Pathogen][] for installation. Simply clone
 this repo into your `~/.vim/bundle` directory and you are ready to go.
 
@@ -32,6 +35,22 @@ Be sure that the following lines are in your
 Apart from syntax highlighting, indentation, and unicode character concealing,
 idris-vim offers some neat interactive editing features. For more information on
 how to use it, read this blog article by Edwin Brady on [Interactive Idris editing with vim][].
+
+## Script commands
+
+`call IdrisConnect()` to connect to Idris prompt,
+though you never need to do this directly as it happens on-demand.
+
+`call IdrisReconnect(prompt)` to reconnect to a different prompt.
+This is a command that would be run,
+for example to try Idris2 once you have it installed, you can do this:
+
+    call IdrisReconnect("idris2 --ide-mode")
+
+`call IdrisDisconnect()` to disconnect from Idris prompt.
+
+`echo IdrisStatus()` tells the status of the connection,
+see `ch_status()` for possible return values.
 
 ## Interactive Editing Commands
 
@@ -71,6 +90,12 @@ commands are supported.
 `<LocalLeader>h` show documentation
 
 ## Configuration
+
+### Prompt selection
+
+`let g:idris_default_prompt = "idris --ide-mode"` is the default configuration
+that you can change according to your preferences.
+Note this doesn't take effect before IdrisDisconnect/IdrisConnect cycle.
 
 ### Indentation
 

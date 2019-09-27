@@ -19,6 +19,254 @@ setlocal wildignore+=*.ibc
 let idris_response = 0
 let b:did_ftplugin = 1
 
+" The connection mamagement logic.
+if exists("g:idris_default_prompt")
+    let s:idris_prompt = g:idris_default_prompt
+else
+    let s:idris_prompt = "idris --ide-mode"
+endif
+
+let s:job = v:null
+let s:channel = v:null
+let s:output = ""
+let s:protocol_version = 0
+let s:pending_requests = {}
+let s:loaded_file = ""
+let s:next_message_id = 1
+
+function! IdrisStatus()
+    if s:job == v:null
+        return "closed"
+    else
+        return ch_status(s:channel)
+    endif
+endfunction
+
+function! IdrisPending()
+    return s:pending_requests
+endfunction
+
+function! IdrisConnect()
+    let s:job = job_start(s:idris_prompt, {'mode':'raw', 'callback':function("s:IdrisHandle")})
+    let s:channel = job_getchannel(s:job)
+endfunction
+
+function! IdrisReconnect(prompt)
+    if IdrisStatus() == "open"
+        call IdrisDisconnect()
+    endif
+    let s:idris_prompt = a:prompt
+    call IdrisConnect()
+endfunction
+
+function! IdrisDisconnect()
+    call ch_close(s:channel)
+    call job_stop(s:job)
+    let s:output = ""
+    let s:protocol_version = 0
+    let s:pending_requests = {}
+    let s:loaded_file = ""
+    let s:next_message_id = 1
+endfunction
+
+function! s:IdrisHandle(channel, msg)
+  let s:output = (s:output . a:msg)
+  if 6 <= strlen(s:output)
+    let kount = str2nr(strpart(s:output, 0, 6), 16)
+    if kount + 6 <= strlen(s:output)
+        let data = strpart(s:output, 6, kount)
+        let s:output = strpart(s:output, 6+kount)
+        call s:IdrisMessage(s:FromSExpr(data))
+    endif
+  endif
+endfunction
+
+" Message handling
+function! s:IdrisMessage(msg)
+    if !s:IsList(a:msg)
+        echoerr printf("idris ide message that is not a list: %s", a:msg)
+        return 0
+    endif
+    if !s:IsCommand(a:msg[0])
+        echoerr printf("idris ide message that is not a command: %s", a:msg)
+        return 0
+    endif
+    let name = a:msg[0]['command']
+    if name == 'return' && s:IsNumber(a:msg[2])
+        if has_key(s:pending_requests, a:msg[2])
+            let req = remove(s:pending_requests, a:msg[2])
+            call req.ok(req, a:msg[1])
+        else
+            " echoerr printf("request '%s' had a response: %s", a:msg[2], a:msg[1])
+        endif
+    elseif name == 'output' && s:IsNumber(a:msg[2])
+    elseif name == 'protocol-version' && s:IsNumber(a:msg[1])
+        let s:protocol_version = a:msg[1]
+    elseif name == 'set-prompt' && s:IsString(a:msg[1])
+        " doing nothing on this message.
+        echoerr printf("set-prompt %s", a:msg[1:])
+    elseif name == 'warning'
+        echoerr printf("warning %s", a:msg[1:])
+    elseif name == 'write-string'
+        echoerr printf("%s", a:msg[1:])
+    else
+        echoerr printf("unknown idris ide message: %s", a:msg)
+    endif
+endfunction
+
+function! s:PrepareSending()
+    if IdrisStatus() != "open"
+        call IdrisConnect()
+    endif
+    while s:protocol_version == 0
+        sleep 100ms
+        if IdrisStatus() != "open"
+            echoerr "protocol not initialized"
+            return 0
+        endif
+    endwhile
+    return s:protocol_version
+endfunction
+
+function! IdrisSendMessage(command)
+    let this_message_id = s:next_message_id
+    let msg = s:ToSExpr([a:command, this_message_id]) . "\n"
+    let s:next_message_id = s:next_message_id + 1
+    call s:Write6HexMessage(msg)
+    return this_message_id
+endfunction
+
+function! IdrisRequest(command, req)
+    let s:pending_requests[s:next_message_id] = a:req
+    call IdrisSendMessage(a:command)
+endfunction
+
+function! s:PrintToBufferResponse(req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+    else
+        let text = a:command[1]
+    endif
+    call IWrite(printf("%s", text))
+endfunction
+let s:print_response = {'ok':function("s:PrintToBufferResponse")}
+
+function! DefaultResponse(req, command)
+    call IWrite(printf("%s", s:ToSExpr(a:command)))
+endfunction
+let s:idris_default_response = {'ok':function("DefaultResponse")}
+
+" Protocol encoding/decoding routines
+function! s:Write6HexMessage(msg)
+    let kount = printf('%06x', strlen(a:msg))
+    call ch_sendraw(s:channel, kount . a:msg)
+endfunction
+
+" The s-expr handling
+function! s:FromSExpr(msg)
+    let start = 0
+    let sexpr = []
+    let context = []
+    while 1
+        let start = start + strlen(matchstr(a:msg, '^\_s\+', start))
+        let head = matchstr(a:msg, '^:[:\-a-zA-Z]\+\|^(\|^)\|^\d\+\|^nil\|^"\([^"]\|\"\)\{-}"', start)
+        if head =~ '^('
+            call add(context, sexpr)
+            let sexpr = []
+        elseif head =~ '^)' && len(context) > 0
+            let top = remove(context, -1)
+            call add(top, sexpr)
+            let sexpr = top
+        elseif head =~ '^:'
+            call add(sexpr, {'command':strpart(head, 1)})
+        elseif head =~ '^\d'
+            call add(sexpr, str2nr(head))
+        elseif head =~ '^"'
+            let item = substitute(strpart(head, 1, strlen(head) - 2), '\\"', '"', 'g')
+            call add(sexpr, item)
+        elseif head =~ '^nil'
+            call add(sexpr, [])
+        elseif start == strlen(a:msg) && len(context) == 0
+            if len(sexpr) == 1
+                return remove(sexpr, 0)
+            else
+                return {'syntax_error':start, 'sexpr':sexpr, 'context':context, 'msg':(a:msg)}
+            endif
+        else
+            return {'syntax_error':start, 'sexpr':sexpr, 'context':context, 'msg':(a:msg)}
+        endif
+        let start = start + strlen(head)
+    endwhile
+endfunction
+
+function! s:IsSyntaxError(item)
+    if type(a:item) == v:t_dict
+        return has_key(a:item, 'syntax_error')
+    endif
+    return 0
+endfunction
+
+function! s:IsList(item)
+    return type(a:item) == v:t_list
+endfunction
+
+function! s:IsString(item)
+    return type(a:item) == v:t_string
+endfunction
+
+function! s:IsNumber(item)
+    return type(a:item) == v:t_number
+endfunction
+
+function! s:IsCommand(item)
+    if type(a:item) == v:t_dict
+        return has_key(a:item, 'command')
+    endif
+endfunction
+
+function! s:ToSExpr(item)
+    if s:IsList(a:item)
+        let forms = []
+        for subitem in a:item
+            call add(forms, s:ToSExpr(subitem))
+        endfor
+        return '(' . join(forms, ' ') . ')'
+    elseif s:IsString(a:item)
+        return '"' . substitute(a:item, '"', '\"', 'g') . '"'
+    elseif s:IsNumber(a:item)
+        return printf("%d", a:item)
+    elseif s:IsCommand(a:item)
+        return ":" . (a:item)['command']
+    endif
+endfunction
+
+" The first and second Idris protocol were simple enough that
+" this can be rewritten on subsequent releases.
+let s:InAnyIdris = 0
+let s:InIdris1 = 1
+let s:InIdris2 = 2
+function! s:IdrisCmd(...)
+    let argc = a:0
+    let suppose = a:1
+    let cmdname = a:2
+    let req = a:000[argc-1]
+    let current_version = s:PrepareSending()
+    if suppose != 0 && current_version != suppose
+        echoerr printf("'%s' does not support :%s", s:idris_prompt, cmdname)
+    else
+        let form = [{'command':cmdname}]
+        for item in a:000[2:argc-2]
+            call add(form, item)
+        endfor
+        if type(req) == v:t_none
+            call IdrisSendMessage(form)
+        else
+            call IdrisRequest(form, req)
+        endif
+    endif
+endfunction
+
 " Text near cursor position that needs to be passed to a command.
 " Refinment of `expand(<cword>)` to accomodate differences between
 " a (n)vim word and what Idris requires.
@@ -29,11 +277,6 @@ function! s:currentQueryObject()
     let word = strpart(word, 1)
   endif
   return word
-endfunction
-
-function! s:IdrisCommand(...)
-  let idriscmd = shellescape(join(a:000))
-  return system("idris --client " . idriscmd)
 endfunction
 
 function! IdrisDocFold(lineNum)
@@ -83,7 +326,12 @@ function! IWrite(str)
     b idris-response
     %delete
     let resp = split(a:str, '\n')
-    call append(1, resp)
+    let n = len(resp)
+    let c = 0
+    while c < n
+        call setbufline("idris-response", c+1, resp[c])
+        let c = c + 1
+    endwhile
     b #
     call setpos('.', save_cursor)
   else
@@ -94,41 +342,48 @@ endfunction
 function! IdrisReload(q)
   w
   let file = expand("%:p")
-  let tc = s:IdrisCommand(":l", file)
-  if (! (tc is ""))
-    call IWrite(tc)
+  call s:IdrisCmd(s:InAnyIdris, "load-file", file, v:null)
+endfunction
+
+function! IdrisReloadGuard(reaction)
+  let file = expand("%:p")
+  if &modified || s:loaded_file != file
+      if &modified
+          w
+      endif
+      call s:IdrisCmd(s:InAnyIdris, "load-file", file, {'ok':function("s:IdrisReloadGuardResponse", [a:reaction, file])})
+      return 0
   else
-    if (a:q==0)
-       echo "Successfully reloaded " . file
-       call IWrite("")
-    endif
+      return 1
   endif
-  return tc
+endfunction
+
+function! s:IdrisReloadGuardResponse(reaction, file, req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let s:loaded_file = a:file
+        call a:reaction()
+    else
+        echoerr a:command[1]
+        " echoerr printf("%s", a:command)
+        " let text = a:command[1]
+    endif
 endfunction
 
 function! IdrisReloadToLine(cline)
   return IdrisReload(1)
-  "w
-  "let file = expand("%:p")
-  "let tc = s:IdrisCommand(":lto", a:cline, file)
-  "if (! (tc is ""))
-  "  call IWrite(tc)
-  "endif
-  "return tc
+endfunction
+
+function! IdrisQueryObject()
+    return s:currentQueryObject()
 endfunction
 
 function! IdrisShowType()
-  w
-  let word = s:currentQueryObject()
-  let cline = line(".")
-  let tc = IdrisReloadToLine(cline)
-  if (! (tc is ""))
-    echo tc
-  else
-    let ty = s:IdrisCommand(":t", word)
-    call IWrite(ty)
+  if IdrisReloadGuard(function("IdrisShowType"))
+      let word = s:currentQueryObject()
+      " let cline = line(".")
+      call s:IdrisCmd(s:InAnyIdris, "type-of", word, s:print_response)
   endif
-  return tc
 endfunction
 
 function! IdrisShowDoc()
@@ -139,27 +394,27 @@ function! IdrisShowDoc()
 endfunction
 
 function! IdrisProofSearch(hint)
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = s:currentQueryObject()
-  let tc = IdrisReload(1)
+    if IdrisReloadGuard(function("IdrisProofSearch", [hint]))
+        let cline = line(".")
+        let word = s:currentQueryObject()
 
-  if (a:hint==0)
-     let hints = ""
-  else
-     let hints = input ("Hints: ")
-  endif
+        if (a:hint==0)
+            let hints = ""
+        else
+            let hints = input ("Hints: ")
+        endif
 
-  if (tc is "")
-    let result = s:IdrisCommand(":ps!", cline, word, hints)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
+        call s:IdrisCmd(s:InAnyIdris, "proof-search", cline, word, hints, s:print_response)
+          "if (tc is "")
+        "let result = s:IdrisCommand(":ps!", cline, word, hints)
+        "if (! (result is ""))
+        "   call IWrite(result)
+        "else
+        "  e
+        "  call winrestview(view)
+        "endif
+        "endif
     endif
-  endif
 endfunction
 
 function! IdrisMakeLemma()
@@ -220,20 +475,26 @@ function! IdrisAddMissing()
 endfunction
 
 function! IdrisCaseSplit()
-  let view = winsaveview()
-  let cline = line(".")
-  let word = expand("<cword>")
-  let tc = IdrisReloadToLine(cline)
-
-  if (tc is "")
-    let result = s:IdrisCommand(":cs!", cline, word)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
-    endif
+  if IdrisReloadGuard(function("IdrisCaseSplit"))
+      let cline = line(".")
+      let word = expand("<cword>")
+      "let word = s:currentQueryObject()
+      call s:IdrisCmd(s:InAnyIdris, "case-split", cline, word, s:print_response)
   endif
+"  let view = winsaveview()
+"  let cline = line(".")
+"  let word = expand("<cword>")
+"  let tc = IdrisReloadToLine(cline)
+"
+"  if (tc is "")
+"    let result = s:IdrisCommand(":cs!", cline, word)
+"    if (! (result is ""))
+"       call IWrite(result)
+"    else
+"      e
+"      call winrestview(view)
+"    endif
+"  endif
 endfunction
 
 function! IdrisMakeWith()
