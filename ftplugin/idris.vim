@@ -131,6 +131,7 @@ endfunction
 
 function! s:SendingGuard(resumption)
     if IdrisStatus() != "open"
+        call IWrite(printf("Starting up: %s", s:idris_prompt))
         call add(s:after_connection, a:resumption)
         call IdrisConnect()
         return 0
@@ -168,7 +169,14 @@ endfunction
 let s:print_response = {'ok':function("s:PrintToBufferResponse")}
 
 function! DefaultResponse(req, command)
-    call IAppend(printf("%s", s:ToSExpr(a:command)))
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
+    else
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
+    endif
 endfunction
 let s:idris_default_response = {'ok':function("DefaultResponse")}
 
@@ -378,7 +386,7 @@ endfunction
 function! IdrisReload(q)
   w
   let file = expand("%:p")
-  call s:IdrisCmd(s:InAnyIdris, "load-file", file, v:null)
+  call s:IdrisCmd(s:InAnyIdris, "load-file", file, s:idris_default_response)
 endfunction
 
 function! IdrisReloadGuard(reaction)
@@ -423,10 +431,10 @@ function! IdrisShowType()
 endfunction
 
 function! IdrisShowDoc()
-  w
-  let word = expand("<cword>")
-  let ty = s:IdrisCommand(":doc", word)
-  call IWrite(ty)
+  if IdrisReloadGuard(function("IdrisShowDoc"))
+    let word = expand("<cword>")
+    call s:IdrisCmd(s:InIdris1, "docs-for", word, s:print_response)
+  endif
 endfunction
 
 function! IdrisProofSearch(hint)
