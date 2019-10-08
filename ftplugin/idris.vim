@@ -48,7 +48,7 @@ function! IdrisPending()
 endfunction
 
 function! IdrisConnect()
-    let s:job = job_start(s:idris_prompt, {'mode':'raw', 'callback':function("s:IdrisHandle")})
+    let s:job = job_start(s:idris_prompt, {'mode':'raw', 'drop':'never', 'callback':function("s:IdrisHandle")})
     let s:channel = job_getchannel(s:job)
 endfunction
 
@@ -73,18 +73,28 @@ endfunction
 
 function! s:IdrisHandle(channel, msg)
   let s:output = (s:output . a:msg)
-  if 6 <= strlen(s:output)
+  while 6 <= strlen(s:output)
     let kount = str2nr(strpart(s:output, 0, 6), 16)
     if kount + 6 <= strlen(s:output)
         let data = strpart(s:output, 6, kount)
         let s:output = strpart(s:output, 6+kount)
         call s:IdrisMessage(s:FromSExpr(data))
+    else
+        break
     endif
-  endif
+  endwhile
 endfunction
 
 " Message handling
 function! s:IdrisMessage(msg)
+    if s:IsSyntaxError(a:msg)
+        call IAppend("*** protocol syntax error ***")
+        call IAppend(printf("message: %s", a:msg.msg))
+        call IAppend(printf("context: %s", a:msg.context))
+        call IAppend(printf("sexpr: %s", a:msg.sexpr))
+        call IAppend(printf("position: %d (before): %s", a:msg.syntax_error, strpart(a:msg.msg, a:msg.syntax_error)))
+        return 0
+    endif
     if !s:IsList(a:msg)
         echoerr printf("idris ide message that is not a list: %s", a:msg)
         return 0
@@ -109,12 +119,11 @@ function! s:IdrisMessage(msg)
         endfor
         let s:after_connection = []
     elseif name == 'set-prompt' && s:IsString(a:msg[1])
-        " doing nothing on this message.
-        echoerr printf("set-prompt %s", a:msg[1:])
+        call IAppend(printf("[%s]", a:msg[1]))
     elseif name == 'warning'
-        echoerr printf("warning %s", a:msg[1:])
+        call IAppend(printf("%s:%d: %s", a:msg[1][0], a:msg[1][1][0], a:msg[1][3]))
     elseif name == 'write-string'
-        echoerr printf("%s", a:msg[1:])
+        call IAppend(printf("%s", a:msg[1]))
     else
         echoerr printf("unknown idris ide message: %s", a:msg)
     endif
@@ -150,15 +159,16 @@ function! s:PrintToBufferResponse(req, command)
     let name = a:command[0]['command']
     if name == 'ok'
         let text = a:command[1]
+        call IWrite(printf("%s", text))
     else
         let text = a:command[1]
+        call IAppend(printf("%s", text))
     endif
-    call IWrite(printf("%s", text))
 endfunction
 let s:print_response = {'ok':function("s:PrintToBufferResponse")}
 
 function! DefaultResponse(req, command)
-    call IWrite(printf("%s", s:ToSExpr(a:command)))
+    call IAppend(printf("%s", s:ToSExpr(a:command)))
 endfunction
 let s:idris_default_response = {'ok':function("DefaultResponse")}
 
@@ -175,7 +185,7 @@ function! s:FromSExpr(msg)
     let context = []
     while 1
         let start = start + strlen(matchstr(a:msg, '^\_s\+', start))
-        let head = matchstr(a:msg, '^:[:\-a-zA-Z]\+\|^(\|^)\|^\d\+\|^nil\|^"\([^"]\|\"\)\{-}"', start)
+        let head = matchstr(a:msg, '^:[:\-a-zA-Z]\+\|^(\|^)\|^\d\+\|^nil\|^"', start)
         if head =~ '^('
             call add(context, sexpr)
             let sexpr = []
@@ -188,7 +198,13 @@ function! s:FromSExpr(msg)
         elseif head =~ '^\d'
             call add(sexpr, str2nr(head))
         elseif head =~ '^"'
-            let item = substitute(strpart(head, 1, strlen(head) - 2), '\\"', '"', 'g')
+            let top = match(a:msg, '\\\@<!"', start+1)
+            if top <= start
+                return {'syntax_error':start, 'sexpr':sexpr, 'context':context, 'msg':(a:msg)}
+            else
+                let head = strpart(a:msg, start, 1+top-start)
+                let item = substitute(strpart(head, 1, strlen(head) - 2), '\\"', '"', 'g')
+            endif
             call add(sexpr, item)
         elseif head =~ '^nil'
             call add(sexpr, [])
@@ -343,6 +359,19 @@ function! IWrite(str)
     call setpos('.', save_cursor)
   else
     echo a:str
+  endif
+endfunction
+
+function! IAppend(str)
+  if (bufexists("idris-response"))
+    let win_view = winsaveview()
+    let save_cursor = getcurpos()
+    b idris-response
+    let resp = split(a:str, '\n')
+    call append(line('$'), resp)
+    b #
+    call setpos('.', save_cursor)
+    call winrestview(win_view)
   endif
 endfunction
 
