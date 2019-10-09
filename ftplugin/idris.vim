@@ -112,6 +112,7 @@ function! s:IdrisMessage(msg)
             " echoerr printf("request '%s' had a response: %s", a:msg[2], a:msg[1])
         endif
     elseif name == 'output' && s:IsNumber(a:msg[2])
+        " call IAppend(printf("%s", a:msg[1]))
     elseif name == 'protocol-version' && s:IsNumber(a:msg[1])
         let s:protocol_version = a:msg[1]
         for Item in s:after_connection
@@ -437,191 +438,177 @@ function! IdrisShowDoc()
   endif
 endfunction
 
+function! s:ReplaceWordResponse(req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+        execute "normal ciW" . printf("%s", text)
+    else
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
+    endif
+endfunction
+
 function! IdrisProofSearch(hint)
-    if IdrisReloadGuard(function("IdrisProofSearch", [hint]))
+    if IdrisReloadGuard(function("IdrisProofSearch", [a:hint]))
         let cline = line(".")
         let word = s:currentQueryObject()
 
         if (a:hint==0)
-            let hints = ""
+            let hints = []
         else
-            let hints = input ("Hints: ")
+            let hints = split(input ("Hints: "), ',')
         endif
+        call s:IdrisCmd(s:InAnyIdris, "proof-search", cline, word, hints, {'ok':function("s:ReplaceWordResponse")})
+    endif
+endfunction
 
-        call s:IdrisCmd(s:InAnyIdris, "proof-search", cline, word, hints, s:print_response)
-          "if (tc is "")
-        "let result = s:IdrisCommand(":ps!", cline, word, hints)
-        "if (! (result is ""))
-        "   call IWrite(result)
-        "else
-        "  e
-        "  call winrestview(view)
-        "endif
-        "endif
+function! s:LemmaResponse(req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
+        " [{'command': 'metavariable-lemma'},
+        "     [{'command': 'replace-metavariable'}, 'ohetui k'],
+        "     [{'command': 'definition-type'}, 'ohetui : (k : Nat) -> Nat']]
+    else
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
     endif
 endfunction
 
 function! IdrisMakeLemma()
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = s:currentQueryObject()
-  let tc = IdrisReload(1)
-
-  if (tc is "")
-    let result = s:IdrisCommand(":ml!", cline, word)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
-      call search(word, "b")
+    if IdrisReloadGuard(function("IdrisMakeLemma"))
+        let cline = line(".")
+        let word = s:currentQueryObject()
+        call s:IdrisCmd(s:InIdris1, "make-lemma", cline, word, {'ok':function("s:LemmaResponse")})
     endif
-  endif
 endfunction
 
-function! IdrisRefine()
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = expand("<cword>")
-  let tc = IdrisReload(1)
+" function! IdrisRefine()
+"   let view = winsaveview()
+"   w
+"   let cline = line(".")
+"   let word = expand("<cword>")
+"   let tc = IdrisReload(1)
+" 
+"   let name = input ("Name: ")
+" 
+"   if (tc is "")
+"     let result = s:IdrisCommand(":ref!", cline, word, name)
+"     if (! (result is ""))
+"        call IWrite(result)
+"     else
+"       e
+"       call winrestview(view)
+"     endif
+"   endif
+" endfunction
+" 
+" function! IdrisAddMissing()
+"   let view = winsaveview()
+"   w
+"   let cline = line(".")
+"   let word = expand("<cword>")
+"   let tc = IdrisReload(1)
+" 
+"   if (tc is "")
+"     let result = s:IdrisCommand(":am!", cline, word)
+"     if (! (result is ""))
+"        call IWrite(result)
+"     else
+"       e
+"       call winrestview(view)
+"     endif
+"   endif
+" endfunction
 
-  let name = input ("Name: ")
-
-  if (tc is "")
-    let result = s:IdrisCommand(":ref!", cline, word, name)
-    if (! (result is ""))
-       call IWrite(result)
+function! s:ReplaceLineResponse(req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+        let resp = split(text, '\n')
+        call append(a:req.cline, resp)
+        execute a:req.cline . 'delete'
     else
-      e
-      call winrestview(view)
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
     endif
-  endif
-endfunction
-
-function! IdrisAddMissing()
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = expand("<cword>")
-  let tc = IdrisReload(1)
-
-  if (tc is "")
-    let result = s:IdrisCommand(":am!", cline, word)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
-    endif
-  endif
 endfunction
 
 function! IdrisCaseSplit()
   if IdrisReloadGuard(function("IdrisCaseSplit"))
       let cline = line(".")
       let word = expand("<cword>")
-      "let word = s:currentQueryObject()
-      call s:IdrisCmd(s:InAnyIdris, "case-split", cline, word, s:print_response)
+      call s:IdrisCmd(s:InAnyIdris, "case-split", cline, word, {'ok':function("s:ReplaceLineResponse"), 'cline':cline})
   endif
-"  let view = winsaveview()
-"  let cline = line(".")
-"  let word = expand("<cword>")
-"  let tc = IdrisReloadToLine(cline)
-"
-"  if (tc is "")
-"    let result = s:IdrisCommand(":cs!", cline, word)
-"    if (! (result is ""))
-"       call IWrite(result)
-"    else
-"      e
-"      call winrestview(view)
-"    endif
-"  endif
 endfunction
 
 function! IdrisMakeWith()
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = s:currentQueryObject()
-  let tc = IdrisReload(1)
-
-  if (tc is "")
-    let result = s:IdrisCommand(":mw!", cline, word)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
-      call search("_")
-    endif
+  if IdrisReloadGuard(function("IdrisMakeWith"))
+      let cline = line(".")
+      let word = expand("<cword>")
+      call s:IdrisCmd(s:InAnyIdris, "make-with", cline, word, {'ok':function("s:ReplaceLineResponse"), 'cline':cline})
   endif
 endfunction
 
 function! IdrisMakeCase()
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = s:currentQueryObject()
-  let tc = IdrisReload(1)
-
-  if (tc is "")
-    let result = s:IdrisCommand(":mc!", cline, word)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
-      call search("_")
-    endif
+  if IdrisReloadGuard(function("IdrisMakeCase"))
+      let cline = line(".")
+      let word = s:currentQueryObject()
+      call s:IdrisCmd(s:InAnyIdris, "make-case", cline, word, {'ok':function("s:ReplaceLineResponse"), 'cline':cline})
   endif
+endfunction
+
+function! s:AddClauseResponse(req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+        normal }b
+        call append(line('.'), split(text, '\n'))
+    else
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
+    endif
 endfunction
 
 function! IdrisAddClause(proof)
-  let view = winsaveview()
-  w
-  let cline = line(".")
-  let word = expand("<cword>")
-  let tc = IdrisReloadToLine(cline)
-
-  if (tc is "")
+  if IdrisReloadGuard(function("IdrisAddClause", [a:proof]))
+    let cline = line(".")
+    let word = expand("<cword>")
     if (a:proof==0)
-      let fn = ":ac!"
+      call s:IdrisCmd(s:InIdris1, "add-clause", cline, word, {'ok':function("s:AddClauseResponse"), 'cline':cline})
     else
-      let fn = ":apc!"
-    endif
-
-    let result = s:IdrisCommand(fn, cline, word)
-    if (! (result is ""))
-       call IWrite(result)
-    else
-      e
-      call winrestview(view)
-      call search(word)
-
+      call s:IdrisCmd(s:InIdris1, "add-proof-clause", cline, word, {'ok':function("s:AddClauseResponse"), 'cline':cline})
     endif
   endif
 endfunction
 
+function! s:EvalResponse(req, command)
+    let name = a:command[0]['command']
+    if name == 'ok'
+        let text = a:command[1]
+        call IWrite(printf("%s", text))
+    else
+        let text = a:command[1]
+        call IAppend(printf("%s", text))
+    endif
+endfunction
+
 function! IdrisEval()
-  w
-  let tc = IdrisReload(1)
-  if (tc is "")
+  if IdrisReloadGuard(function("IdrisEval"))
      let expr = input ("Expression: ")
-     let result = s:IdrisCommand(expr)
-     call IWrite(" = " . result)
+      call s:IdrisCmd(s:InIdris1, "interpret", expr, {'ok':function("s:EvalResponse")})
   endif
 endfunction
 
 nnoremap <buffer> <silent> <LocalLeader>t :call IdrisShowType()<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>r :call IdrisReload(0)<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>c :call IdrisCaseSplit()<ENTER>
-nnoremap <buffer> <silent> <LocalLeader>d 0:call search(":")<ENTER>b:call IdrisAddClause(0)<ENTER>w
+nnoremap <buffer> <silent> <LocalLeader>d 0:call search(":")<ENTER>b:call IdrisAddClause(0)<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>b 0:call IdrisAddClause(0)<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>m :call IdrisAddMissing()<ENTER>
-nnoremap <buffer> <silent> <LocalLeader>md 0:call search(":")<ENTER>b:call IdrisAddClause(1)<ENTER>w
+nnoremap <buffer> <silent> <LocalLeader>md 0:call search(":")<ENTER>b:call IdrisAddClause(1)<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>f :call IdrisRefine()<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>o :call IdrisProofSearch(0)<ENTER>
 nnoremap <buffer> <silent> <LocalLeader>p :call IdrisProofSearch(1)<ENTER>
