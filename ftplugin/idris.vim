@@ -390,6 +390,10 @@ function! IdrisReload(q)
   call s:IdrisCmd(s:InAnyIdris, "load-file", file, s:idris_default_response)
 endfunction
 
+function! s:IdrisMustReload()
+    let s:loaded_file = ""
+endfunction
+
 function! IdrisReloadGuard(reaction)
   let file = expand("%:p")
   if &modified || s:loaded_file != file
@@ -632,3 +636,4 @@ menu Idris.Proof\ Search\ with\ hints <LocalLeader>p
 
 au BufHidden idris-response call IdrisHideResponseWin()
 au BufEnter idris-response call IdrisShowResponseWin()
+au BufWrite *.idr call s:IdrisMustReload()
