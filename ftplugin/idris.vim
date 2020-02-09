@@ -54,6 +54,14 @@ function ClearWin()
 
 	call win_gotoid(current_window)
 endfunction
+
+function ReloadRepl()
+	let current_window = win_getid()
+	call s:WinByBufname('!idris ')
+	call term_sendkeys(bufnr(), ":r\<cr>")
+	call win_gotoid(current_window)
+endfunction
+
 function! IdrisStatus()
 	if s:job == v:null
 		return "closed"
@@ -406,6 +414,7 @@ endfunction
 
 function! IdrisReload(q)
 	w
+	call ReloadRepl()
 	let file = expand("%:p")
 	call s:IdrisCmd(s:InAnyIdris, "load-file", file, s:idris_default_response)
 endfunction
