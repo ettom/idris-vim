@@ -35,6 +35,25 @@ let s:pending_requests = {}
 let s:loaded_file = ""
 let s:next_message_id = 1
 
+function! s:WinByBufname(bufname)
+	try
+		let bufmap = map(range(1, winnr('$')), '[bufname(winbufnr(v:val)), v:val]')
+		let thewindow = filter(bufmap, 'v:val[0] =~ a:bufname')[0][1]
+		execute thewindow 'wincmd w'
+	catch
+	endtry
+
+endfunction
+
+function ClearWin()
+	let current_window = win_getid()
+	call s:WinByBufname('idris-response')
+	if bufname() == "idris-response"
+		1,$d
+	endif
+
+	call win_gotoid(current_window)
+endfunction
 function! IdrisStatus()
 	if s:job == v:null
 		return "closed"
@@ -278,6 +297,7 @@ let s:InIdris1 = 1
 let s:InIdris2 = 2
 function! s:IdrisCmd(...)
 	if s:SendingGuard(function("s:IdrisCmd", a:000))
+		call ClearWin()
 		let argc = a:0
 		let suppose = a:1
 		let cmdname = a:2
@@ -329,19 +349,19 @@ setlocal foldmethod=expr
 setlocal foldexpr=IdrisFold(v:lnum)
 
 function! IdrisResponseWin()
+	let current_window = win_getid()
 	if (!bufexists("idris-response"))
 		botright 10split
 		badd idris-response
 		b idris-response
 		let g:idris_respwin = "active"
 		set buftype=nofile
-		wincmd k
 	elseif (bufexists("idris-response") && g:idris_respwin == "hidden")
 		botright 10split
 		b idris-response
 		let g:idris_respwin = "active"
-		wincmd k
 	endif
+	call win_gotoid(current_window)
 endfunction
 
 function! IdrisHideResponseWin()
