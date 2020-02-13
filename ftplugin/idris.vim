@@ -49,6 +49,7 @@ function ClearWin()
 	let current_window = win_getid()
 	call s:WinByBufname('idris-response')
 	if bufname() == "idris-response"
+		resize 10
 		1,$d
 	endif
 
