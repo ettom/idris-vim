@@ -59,7 +59,7 @@ endfunction
 function ReloadRepl()
 	let current_window = win_getid()
 	call s:WinByBufname('!idris ')
-	call term_sendkeys(bufnr(), ":r\<cr>")
+	call term_sendkeys(bufnr(), repeat("\b", 30) . ":r\<cr>")
 	call win_gotoid(current_window)
 endfunction
 
